@@ -1,0 +1,303 @@
+name: CD Pipeline
+
+permissions:
+  contents: write
+
+# CD triggers directly on the merge push to main; CI already gated the PR.
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (${{ matrix.suffix }})
+    # workflow_dispatch can run from any ref; only main may release.
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            suffix: linux-x86_64
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            suffix: linux-aarch64
+            target: aarch64-unknown-linux-musl
+          - os: macos-latest
+            suffix: macos
+          - os: windows-latest
+            suffix: windows
+
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.4.0
+
+      - name: Get version
+        id: get_version
+        shell: bash
+        run: |
+          VER=$(grep '^version' Cargo.toml \
+            | head -n1 \
+            | sed -E 's/version *= *"([^"]+)".*/\1/')
+          echo "version=$VER" >> $GITHUB_OUTPUT
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          V=${{ steps.get_version.outputs.version }}
+          SUF=${{ matrix.suffix }}
+
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            cargo build --release -p workuum
+            mv target/release/workuum.exe workuum-${V}-windows.exe
+            exit 0
+          fi
+
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            # Universal binary for Intel and ARM
+            rustup target add x86_64-apple-darwin aarch64-apple-darwin
+            cargo build --release -p workuum --target x86_64-apple-darwin
+            cargo build --release -p workuum --target aarch64-apple-darwin
+            lipo -create \
+              target/x86_64-apple-darwin/release/workuum \
+              target/aarch64-apple-darwin/release/workuum \
+              -output workuum
+          else
+            # Static musl build so the binary runs on any distro regardless of glibc version.
+            sudo apt-get update && sudo apt-get install -y musl-tools
+            rustup target add ${{ matrix.target }}
+            cargo build --release -p workuum --target ${{ matrix.target }}
+            cp target/${{ matrix.target }}/release/workuum workuum
+          fi
+
+          chmod +x workuum
+          tar -czvf workuum-${V}-${SUF}.tar.gz workuum
+          rm workuum
+
+      - name: Checksum artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.get_version.outputs.version }}"
+          $artifact = "workuum-$ver-windows.exe"
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $artifact).Hash.ToLowerInvariant()
+          $line = "$hash  $artifact"
+          # sha256sum format, LF-terminated -- Set-Content defaults to CRLF, which sha256sum -c rejects.
+          [System.IO.File]::WriteAllText("$artifact.sha256", "$line`n")
+
+      - name: Checksum artifact (Unix)
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          V=${{ steps.get_version.outputs.version }}
+          SUF=${{ matrix.suffix }}
+          ARTIFACT="workuum-${V}-${SUF}.tar.gz"
+          sha256sum "$ARTIFACT" > "$ARTIFACT.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: workuum-${{ matrix.suffix }}
+          path: |
+            ${{ matrix.os == 'windows-latest' && format('workuum-{0}-windows.exe', steps.get_version.outputs.version) || format('workuum-{0}-{1}.tar.gz', steps.get_version.outputs.version, matrix.suffix) }}
+            ${{ matrix.os == 'windows-latest' && format('workuum-{0}-windows.exe.sha256', steps.get_version.outputs.version) || format('workuum-{0}-{1}.tar.gz.sha256', steps.get_version.outputs.version, matrix.suffix) }}
+
+  release:
+    name: Create GitHub Release & Upload Assets
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    outputs:
+      version: ${{ needs.build.outputs.version }}
+      published: ${{ steps.release.outputs.published }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Fetch version
+        run: echo "Version is ${{ needs.build.outputs.version }}"
+
+      # Tag is pushed before the cosmetic changelog commit, so a failed changelog push never blocks the release.
+      - name: Update CHANGELOG.md And Create Tag
+        id: tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v${{ needs.build.outputs.version }}"
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+
+          # No --from: the script finds the previous tag itself, which stays correct on a re-run after $TAG exists.
+          DATE=$(date -u +%Y-%m-%d)
+          bash scripts/generate-changelog.sh --section --to HEAD \
+            --header "## ${TAG} (${DATE})" > changelog-section.md
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists -- CHANGELOG.md not touched again"
+          else
+            if [ ! -f CHANGELOG.md ]; then
+              bash scripts/generate-changelog.sh --print-header > CHANGELOG.md
+            fi
+            # Insert before the first existing "## v..." section, or at the end on the first entry.
+            first=$(grep -n '^## v' CHANGELOG.md | head -1 | cut -d: -f1 || true)
+            first=${first:-$(($(wc -l < CHANGELOG.md) + 1))}
+            {
+              head -n "$((first - 1))" CHANGELOG.md
+              cat changelog-section.md
+              tail -n "+${first}" CHANGELOG.md
+            } > changelog-new.md
+            mv changelog-new.md CHANGELOG.md
+
+            git add CHANGELOG.md
+            git commit -m "docs: CHANGELOG.md for ${TAG} [skip ci]"
+            git tag "$TAG"
+
+            git push origin "$TAG"
+
+            if ! git push origin HEAD:main; then
+              echo "::warning::Tag ${TAG} was pushed and the release will proceed, but pushing the CHANGELOG.md commit to main failed. The next release's changelog section folds in what this one missed. To backfill now, run: bash scripts/generate-changelog.sh --section --to ${TAG} --header \"## ${TAG} (${DATE})\" and commit the result to main."
+            fi
+          fi
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4.3.0
+        with:
+          pattern: workuum-*
+          merge-multiple: true
+          path: artifacts
+
+      - name: Attest Release Assets
+        uses: actions/attest-build-provenance@v2.4.0
+        with:
+          subject-path: artifacts/workuum-${{ needs.build.outputs.version }}-*
+
+      - name: Create Release with Assets
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="v${{ needs.build.outputs.version }}"
+          V="${{ needs.build.outputs.version }}"
+
+          # Immutable releases need assets uploaded while still a draft.
+          # Skip published releases so re-runs succeed without changing them.
+          if IS_DRAFT=$(gh release view "$TAG" --json isDraft --jq .isDraft); then
+            if [[ "$IS_DRAFT" == "false" ]]; then
+              echo "::notice::release $TAG is already published; nothing to do"
+              echo "published=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          else
+            gh release create "$TAG" --draft --title "Release $TAG" --notes-file changelog-section.md
+          fi
+
+          gh release upload "$TAG" \
+            "artifacts/workuum-${V}-windows.exe" \
+            "artifacts/workuum-${V}-windows.exe.sha256" \
+            "artifacts/workuum-${V}-linux-x86_64.tar.gz" \
+            "artifacts/workuum-${V}-linux-x86_64.tar.gz.sha256" \
+            "artifacts/workuum-${V}-linux-aarch64.tar.gz" \
+            "artifacts/workuum-${V}-linux-aarch64.tar.gz.sha256" \
+            "artifacts/workuum-${V}-macos.tar.gz" \
+            "artifacts/workuum-${V}-macos.tar.gz.sha256" \
+            --clobber
+          gh release edit "$TAG" --draft=false --latest
+          echo "published=true" >> "$GITHUB_OUTPUT"
+
+  update-homebrew:
+    name: Update Homebrew Tap
+    runs-on: ubuntu-latest
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    environment:
+      name: homebrew-release
+    steps:
+      - uses: actions/checkout@v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Download Unix Artifacts for Homebrew
+        uses: actions/download-artifact@v4.3.0
+        with:
+          pattern: workuum-*
+          merge-multiple: true
+          path: artifacts
+
+      - name: Get version from Cargo.toml
+        id: get_version
+        shell: bash
+        run: |
+          VERSION=$(grep '^version' Cargo.toml \
+            | head -n1 \
+            | sed -E 's/version *= *"([^"]+)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update Homebrew Formula
+        shell: bash
+        env:
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          chmod +x ./scripts/update_homebrew.sh
+          ./scripts/update_homebrew.sh \
+            "${{ steps.get_version.outputs.version }}" \
+            "artifacts/workuum-${{ steps.get_version.outputs.version }}-macos.tar.gz" \
+            "artifacts/workuum-${{ steps.get_version.outputs.version }}-linux-x86_64.tar.gz" \
+            "artifacts/workuum-${{ steps.get_version.outputs.version }}-linux-aarch64.tar.gz"
+
+  update-chocolatey:
+    name: Update Chocolatey Package
+    runs-on: windows-latest
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    environment:
+      name: chocolatey-release
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Get version from Cargo.toml (Chocolatey)
+        id: get_version_choco
+        shell: bash
+        run: |
+          VERSION=$(grep '^version' Cargo.toml \
+            | head -n1 \
+            | sed -E 's/version *= *"([^"]+)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v4.3.0
+        with:
+          name: workuum-windows
+          path: artifacts
+
+      - name: Update Chocolatey Package
+        shell: pwsh
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+        run: |
+          choco config set --name='defaultPushSource' --value='https://push.chocolatey.org/'
+
+          $ver = '${{ steps.get_version_choco.outputs.version }}'
+          Write-Host "Releasing version: $ver"
+
+          $artifact = "artifacts/workuum-$ver-windows.exe"
+          Write-Host "Using artifact: $artifact"
+
+          ./scripts/update_chocolatey.ps1 -Version $ver -ArtifactPath $artifact

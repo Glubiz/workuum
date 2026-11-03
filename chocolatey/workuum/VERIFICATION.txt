@@ -1,0 +1,46 @@
+Chocolatey Package Verification for workuum
+
+PACKAGE CONTENTS
+The Chocolatey package for workuum contains the following files:
+
+1. tools/workuum.exe
+   - The compiled Windows executable
+   - Built from the official GitHub repository: https://github.com/Glubiz/workuum
+   - Placed in the tools directory by scripts/update_chocolatey.ps1
+
+2. LICENSE.txt
+   - MIT License for the project
+   - Included in the package root and in the tools directory
+
+3. VERIFICATION.txt
+   - This file
+
+BINARY VERIFICATION
+To verify the integrity of the workuum.exe binary included in this package:
+
+1. Identify the Release Version
+   - Check the package version from Chocolatey: choco info workuum
+   - Or review the installed package: Get-ChildItem "$env:ChocolateyInstall\lib\workuum\"
+
+2. Download the Official Release Asset
+   - Visit https://github.com/Glubiz/workuum/releases
+   - Find the release matching the package version
+   - Download workuum-<version>-windows.exe and its accompanying workuum-<version>-windows.exe.sha256 checksum file
+     (e.g., for version 4.9.0: workuum-4.9.0-windows.exe and workuum-4.9.0-windows.exe.sha256)
+
+3. Verify the Checksum
+   - Extract the expected SHA256 from the .sha256 file
+   - Generate the checksum of the installed binary:
+     Get-FileHash -Algorithm SHA256 "$env:ChocolateyInstall\lib\workuum\tools\workuum.exe"
+   - Compare the checksums; they must match exactly
+
+4. Build from Source (Alternative)
+   You can also build the binary from source to verify:
+   - Clone the repository: git clone https://github.com/Glubiz/workuum.git
+   - Build with Cargo: cargo build --release
+   - The resulting binary can be found in target/release/workuum.exe
+
+LICENSING
+- The project is licensed under the MIT License
+- See LICENSE.txt for the full license text
+- The license matches the official repository license: https://github.com/Glubiz/workuum/blob/main/LICENSE
