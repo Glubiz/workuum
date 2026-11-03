@@ -15,6 +15,9 @@ type Window = Option<Duration>;
 pub struct Cli {
     #[command(flatten)]
     pub options: Options,
+    /// Saved settings session to use [default: "default" when saved]
+    #[arg(long, global = true, env = "WORKUUM_SESSION")]
+    pub session: Option<String>,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -61,6 +64,16 @@ pub struct Options {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Install the latest workuum release when it is newer than this one
+    Update,
+    /// Edit saved settings sessions in a full-screen terminal UI
+    Settings,
+    #[command(flatten)]
+    Pass(PassCommand),
+}
+
+#[derive(Subcommand)]
+pub enum PassCommand {
     /// Show what workuum finds and what it would do, change nothing
     List {
         /// Print a JSON array
@@ -82,6 +95,4 @@ pub enum Command {
         #[arg(long, env = "WORKUUM_INTERVAL", default_value = "1h", value_parser = parse_duration)]
         interval: Duration,
     },
-    /// Install the latest workuum release when it is newer than this one
-    Update,
 }

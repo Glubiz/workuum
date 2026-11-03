@@ -7,5 +7,5 @@ mod walk;
 
 pub use disk::{Space, VolumeId, dir_size, last_use, space, volume_id};
 pub use globals::{Located, clean, locate};
-pub use index::{Index, PassLock, lock, state_dir};
+pub use index::{Index, PassLock, lock, state_dir, write_atomic};
 pub use walk::{Cache, Found, default_excludes, find_entries};
