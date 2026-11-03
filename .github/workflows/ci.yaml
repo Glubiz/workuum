@@ -1,0 +1,122 @@
+name: CI Pipeline
+
+# Merge gate only: CD triggers on the merge push to main, so CI does not run on pushes.
+on:
+  pull_request:
+    branches: [ main, 'release/**' ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.4.0
+
+      - name: Set Up Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo Registry
+        uses: actions/cache@v4.3.0
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo Build
+        uses: actions/cache@v4.3.0
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-build-
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2.87.20
+        with:
+          tool: cargo-nextest@0.9.143
+
+      - name: Check Code Formatting
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run Tests
+        run: cargo nextest run --workspace --no-fail-fast
+
+  dependency-audit:
+    name: Dependency Advisory Check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.4.0
+
+      - name: Audit Dependencies
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # PRs into release/** share one pinned version, so only PRs into main are checked.
+  version-bump:
+    name: Version Bump Check
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      # Full history so the three-dot diff has a real merge base.
+      - name: Checkout Code
+        uses: actions/checkout@v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Require a version above the base branch when shipped code changed
+        run: |
+          BASE="origin/${{ github.base_ref }}"
+          extract() { grep '^version' "$1" | head -1 | sed -E 's/version *= *"([^"]+)".*/\1/'; }
+          # The base branch has no Cargo.toml before the first release.
+          if ! git show "$BASE:Cargo.toml" > /tmp/base-Cargo.toml 2>/dev/null; then
+            echo "::notice::${{ github.base_ref }} has no Cargo.toml yet -- first release, version bump not required"
+            exit 0
+          fi
+          BASE_VERSION=$(extract /tmp/base-Cargo.toml)
+          HEAD=$(extract Cargo.toml)
+          echo "base branch version: $BASE_VERSION — PR version: $HEAD"
+
+          # A lower version fails even on a docs-only diff: base may have bumped past the merge-base.
+          if [ "$(printf '%s\n%s\n' "$BASE_VERSION" "$HEAD" | sort -V | tail -1)" != "$HEAD" ]; then
+            echo "::error file=Cargo.toml::Version ($HEAD) is lower than ${{ github.base_ref }}'s ($BASE_VERSION)."
+            exit 1
+          fi
+
+          # --no-renames so a file renamed out of a shipped path still shows up.
+          CHANGED=$(git diff --name-only --no-renames "$BASE...HEAD")
+          if ! echo "$CHANGED" | grep -qE '^crates/|^Cargo\.toml$|^Cargo\.lock$'; then
+            echo "::notice::no shipped-code paths changed since ${{ github.base_ref }} (crates/, Cargo.toml, Cargo.lock) -- version bump not required"
+            exit 0
+          fi
+          if [ "$BASE_VERSION" = "$HEAD" ]; then
+            echo "::error file=Cargo.toml::Version ($HEAD) is unchanged from ${{ github.base_ref }} but shipped code changed. Bump it -- a version bump is what makes CD actually publish the change."
+            exit 1
+          fi
+
+      # Advisory only: never gates the PR.
+      - name: Suggest bump size from conventional commits (advisory)
+        if: always()
+        continue-on-error: true
+        run: |
+          BASE="origin/${{ github.base_ref }}"
+          SUGGESTION=$(bash scripts/generate-changelog.sh --suggest-bump --from "$BASE" --to HEAD)
+          echo "::notice::conventional-commit suggested bump size: $SUGGESTION"

@@ -1,0 +1,9 @@
+[Unit]
+Description=workuum worktree cleaner
+
+[Service]
+ExecStart=/usr/local/bin/workuum watch
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

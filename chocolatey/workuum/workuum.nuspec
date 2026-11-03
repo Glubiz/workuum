@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package>
+  <metadata>
+    <id>workuum</id>
+    <version>0.0.0-placeholder</version>
+    <!-- NOTE: Build-time placeholder. scripts/update_chocolatey.ps1 replaces it with the version from Cargo.toml on the CI runner. -->
+    <title>Workuum</title>
+    <authors>Jonathan Solskov</authors>
+    <owners>Zirv</owners>
+    <description><![CDATA[
+Workuum removes merged, stale and least-recently-used git worktrees to keep disk space free. Run it once with `workuum clean`, or keep it running in the background with `workuum watch`.
+    ]]></description>
+    <summary><![CDATA[
+Removes merged, stale and least-recently-used git worktrees to keep disk space free.
+    ]]></summary>
+    <releaseNotes><![CDATA[
+For complete release notes, please visit https://github.com/Glubiz/workuum/releases/tag/v0.0.0-placeholder.
+    ]]></releaseNotes>
+    <licenseUrl>https://github.com/Glubiz/workuum/tree/main/chocolatey/workuum/LICENSE.txt</licenseUrl>
+    <projectUrl>https://github.com/Glubiz/workuum</projectUrl>
+    <packageSourceUrl>https://github.com/Glubiz/workuum</packageSourceUrl>
+    <docsUrl>https://github.com/Glubiz/workuum</docsUrl>
+    <bugTrackerUrl>https://github.com/Glubiz/workuum/issues</bugTrackerUrl>
+    <tags>cli tool git worktree cleanup workuum</tags>
+  </metadata>
+  <files>
+    <file src="tools\workuum.exe" target="tools" />
+    <file src="LICENSE.txt" target="tools" />
+    <file src="VERIFICATION.txt" target="tools" />
+  </files>
+</package>
