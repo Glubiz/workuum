@@ -113,7 +113,7 @@ impl Sandbox {
 }
 
 fn canonical(path: &Path) -> PathBuf {
-    fs::canonicalize(path).unwrap()
+    dunce::canonicalize(path).unwrap()
 }
 
 fn stdout(output: &Output) -> String {
