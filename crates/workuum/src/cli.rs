@@ -82,4 +82,6 @@ pub enum Command {
         #[arg(long, env = "WORKUUM_INTERVAL", default_value = "1h", value_parser = parse_duration)]
         interval: Duration,
     },
+    /// Install the latest workuum release when it is newer than this one
+    Update,
 }

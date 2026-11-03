@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Jonathan Solskov <josj@zirv.io>"]
 license = "MIT"
@@ -13,11 +13,17 @@ repository = "https://github.com/Glubiz/workuum"
 clap = { version = "4.6.7", features = ["derive", "env"] }
 dirs = "6.0.0"
 dunce = "1.0.5"
+flate2 = "1.1.9"
 glob = "0.3.4"
 libc = "0.2.189"
+ratatui = "0.30.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.152"
+sha2 = "0.11.0"
+tar = "0.4.46"
 tempfile = "3.27.0"
+toml = "1.0.6"
+ureq = "3.4.0"
 walkdir = "2.5.0"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 workuum-core = { path = "crates/workuum-core" }

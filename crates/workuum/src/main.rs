@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod pass;
 mod report;
+mod update;
 mod watch;
 
 use std::process::ExitCode;
@@ -12,6 +13,9 @@ use cli::{Cli, Command};
 use config::Config;
 
 fn run(cli: Cli) -> Result<(), String> {
+    if matches!(cli.command, Command::Update) {
+        return update::run();
+    }
     let config = Config::resolve(cli.options)?;
     match cli.command {
         Command::List { json, size } => {
@@ -23,6 +27,7 @@ fn run(cli: Cli) -> Result<(), String> {
             pass::clean(&config, dry_run).map_err(|error| error.to_string())
         }
         Command::Watch { interval } => watch::run(&config, interval),
+        Command::Update => unreachable!("handled before the config is resolved"),
     }
 }
 
