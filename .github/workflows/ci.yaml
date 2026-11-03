@@ -55,6 +55,35 @@ jobs:
       - name: Run Tests
         run: cargo nextest run --workspace --no-fail-fast
 
+  # ureq pulls in ring, which compiles C; the musl release builds otherwise only run after merge.
+  release-build:
+    name: Release build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.4.0
+
+      - name: Set Up Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Static musl Binary
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          rustup target add ${{ matrix.target }}
+          cargo build --release -p workuum --target ${{ matrix.target }}
+
+      - name: Run Binary
+        run: target/${{ matrix.target }}/release/workuum --version
+
   # Runs this checkout's installers against the latest published release.
   install:
     name: Install (${{ matrix.os }})
