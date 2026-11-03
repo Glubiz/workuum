@@ -4,9 +4,29 @@ Docuum for git worktrees. workuum finds every linked git worktree on your machin
 
 ## Install
 
+macOS and Linux:
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Glubiz/workuum/main/install.sh | sh
 ```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/Glubiz/workuum/main/install.ps1 | iex
+```
+
+Add `--service` (`-Service` on Windows) to also register the background service, see [Running in the background](#running-in-the-background):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Glubiz/workuum/main/install.sh | sh -s -- --service
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Glubiz/workuum/main/install.ps1))) -Service
+```
+
+The scripts install the latest release, or the version you pass (`sh -s -- 0.1.0`, `-Version 0.1.0`), and verify its sha256. `WORKUUM_INSTALL_DIR` sets the folder (`/usr/local/bin`, or `%LOCALAPPDATA%\Programs\workuum` on Windows). They refuse to overwrite a Homebrew or Chocolatey install unless `WORKUUM_INSTALL_FORCE=1` (`-Force`).
 
 Homebrew (macOS and Linux), using the `Glubiz/homebrew-tap` tap:
 
@@ -25,6 +45,14 @@ From source:
 ```sh
 cargo install --path crates/workuum
 ```
+
+## Updating
+
+`workuum update` checks the latest GitHub release and does nothing when already current.
+
+When Homebrew or Chocolatey owns the binary, it runs `brew upgrade workuum` or `choco upgrade workuum -y` (Chocolatey needs an elevated shell). On failure it prints the command to run.
+
+Otherwise it downloads the release for your OS and CPU, verifies its sha256, checks the new binary runs, and replaces the running binary in place. When the binary lives in a folder that needs admin rights, such as `/usr/local/bin`, run it with `sudo`.
 
 ## Quick start
 
@@ -118,7 +146,13 @@ Durations look like `90s`, `30m`, `24h`, `1d` or `2w`.
 
 ## Running in the background
 
-The files in `service/` run `workuum watch` and assume the binary is at `/usr/local/bin/workuum` (the Windows task runs `workuum.exe` from your `PATH`).
+The files in `service/` run `workuum watch` with no flags, so the service uses your saved `default` settings session. The simplest way to register it is the installer with `--service` (`-Service` on Windows). It fetches the service file for the installed version, points it at the installed binary and replaces any earlier registration, so re-running is safe:
+
+- macOS: a launchd agent at `~/Library/LaunchAgents/local.workuum.plist`.
+- Linux: a systemd user unit at `~/.config/systemd/user/workuum.service`. This needs a systemd user session.
+- Windows: a scheduled task named `workuum` that runs at logon.
+
+If registration fails the binary is still installed, and the installer prints the manual steps and exits non-zero. To do it by hand, edit the binary path in the file (the files assume `/usr/local/bin/workuum`; the Windows task runs `workuum.exe` from your `PATH`) and then:
 
 macOS:
 

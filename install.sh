@@ -114,8 +114,80 @@ verify_checksum() {
     echo "Checksum verified."
 }
 
+# Registers the background service from the repo's service/ folder at the installed tag.
+register_service() {
+    version="$1"
+    binary_path="$2"
+    tmpdir="$3"
+    base_url="https://raw.githubusercontent.com/${REPO}/v${version}/service"
+    # Escape sed replacement specials in the binary path.
+    sed_path=$(printf '%s' "$binary_path" | sed 's/[\\|&]/\\&/g')
+
+    case "$(uname -s)" in
+        Darwin)
+            file="local.workuum.plist"
+            dest="${HOME}/Library/LaunchAgents/${file}"
+            mkdir -p "${HOME}/Library/LaunchAgents"
+            curl -sSfL -o "${tmpdir}/${file}" "${base_url}/${file}" || return 1
+            sed "s|/usr/local/bin/workuum|${sed_path}|" "${tmpdir}/${file}" > "$dest" || return 1
+            uid=$(id -u)
+            launchctl bootout "gui/${uid}" "$dest" >/dev/null 2>&1 || true
+            # bootout can still be tearing down the old job; retry bootstrap briefly.
+            attempt=1
+            until launchctl bootstrap "gui/${uid}" "$dest"; do
+                [ "$attempt" -lt 5 ] || return 1
+                attempt=$((attempt + 1))
+                sleep 1
+            done
+            ;;
+        Linux)
+            file="workuum.service"
+            dest="${HOME}/.config/systemd/user/${file}"
+            mkdir -p "${HOME}/.config/systemd/user"
+            curl -sSfL -o "${tmpdir}/${file}" "${base_url}/${file}" || return 1
+            sed "s|/usr/local/bin/workuum|${sed_path}|" "${tmpdir}/${file}" > "$dest" || return 1
+            systemctl --user daemon-reload || return 1
+            systemctl --user enable workuum.service || return 1
+            systemctl --user restart workuum.service || return 1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    echo "Service registered: ${dest}"
+}
+
+print_manual_service_steps() {
+    version="$1"
+    base_url="https://raw.githubusercontent.com/${REPO}/v${version}/service"
+    echo "workuum IS installed, but the service could not be registered." >&2
+    echo "Register it manually (edit the binary path in the file to ${INSTALL_DIR}/${BINARY_NAME}):" >&2
+    if [ "$(uname -s)" = "Darwin" ]; then
+        echo "  curl -fsSL ${base_url}/local.workuum.plist -o ~/Library/LaunchAgents/local.workuum.plist" >&2
+        echo "  launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/local.workuum.plist" >&2
+    else
+        echo "  mkdir -p ~/.config/systemd/user" >&2
+        echo "  curl -fsSL ${base_url}/workuum.service -o ~/.config/systemd/user/workuum.service" >&2
+        echo "  systemctl --user daemon-reload && systemctl --user enable --now workuum.service" >&2
+        echo "Without a systemd user session, run 'workuum watch' from your own supervisor instead." >&2
+    fi
+}
+
 main() {
-    VERSION="${1:-$(get_latest_version)}"
+    SERVICE=0
+    VERSION_ARG=""
+    for arg in "$@"; do
+        case "$arg" in
+            --service) SERVICE=1 ;;
+            -*)
+                echo "Error: unknown option ${arg}. Usage: install.sh [--service] [version]" >&2
+                exit 1
+                ;;
+            *) VERSION_ARG="$arg" ;;
+        esac
+    done
+
+    VERSION="${VERSION_ARG:-$(get_latest_version)}"
     if [ -z "$VERSION" ]; then
         echo "Error: Could not determine latest version." >&2
         exit 1
@@ -179,6 +251,14 @@ main() {
     fi
 
     echo "Run '${verify_cmd}' to verify."
+
+    if [ "$SERVICE" = "1" ]; then
+        abs_dir=$(cd "$INSTALL_DIR" && pwd)
+        if ! register_service "$VERSION" "${abs_dir}/${BINARY_NAME}" "$workuum_tmpdir"; then
+            print_manual_service_steps "$VERSION"
+            exit 1
+        fi
+    fi
 }
 
 main "$@"

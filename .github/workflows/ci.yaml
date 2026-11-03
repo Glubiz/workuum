@@ -55,6 +55,65 @@ jobs:
       - name: Run Tests
         run: cargo nextest run --workspace --no-fail-fast
 
+  # Runs this checkout's installers against the latest published release.
+  install:
+    name: Install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.4.0
+
+      # Linux runners have no reliable systemd user session, so --service is only exercised on macOS.
+      - name: Install (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          WORKUUM_INSTALL_DIR="$RUNNER_TEMP/wk/bin" sh install.sh
+          "$RUNNER_TEMP/wk/bin/workuum" --version
+
+      - name: Install with service (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          WORKUUM_INSTALL_DIR="$RUNNER_TEMP/wk/bin" sh install.sh --service
+          "$RUNNER_TEMP/wk/bin/workuum" --version
+          launchctl print "gui/$(id -u)/local.workuum"
+          # Re-running must replace the registration.
+          WORKUUM_INSTALL_DIR="$RUNNER_TEMP/wk/bin" sh install.sh --service
+          launchctl print "gui/$(id -u)/local.workuum"
+
+      - name: Clean up service (macOS)
+        if: runner.os == 'macOS' && always()
+        run: |
+          launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/local.workuum.plist" || true
+          rm -f "$HOME/Library/LaunchAgents/local.workuum.plist"
+
+      - name: Install with service (Windows PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $PSVersionTable.PSVersion
+          & .\install.ps1 -InstallDir "$env:RUNNER_TEMP\wk\bin" -Service
+          & "$env:RUNNER_TEMP\wk\bin\workuum.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw 'workuum --version failed' }
+          schtasks /Query /TN workuum
+          if ($LASTEXITCODE -ne 0) { throw 'scheduled task missing' }
+          # Re-running must replace the task.
+          & .\install.ps1 -InstallDir "$env:RUNNER_TEMP\wk\bin" -Service
+          schtasks /Query /TN workuum
+          if ($LASTEXITCODE -ne 0) { throw 'scheduled task missing after re-run' }
+
+      - name: Clean up service (Windows)
+        if: runner.os == 'Windows' && always()
+        shell: powershell
+        run: |
+          schtasks /End /TN workuum
+          schtasks /Delete /TN workuum /F
+        continue-on-error: true
+
   dependency-audit:
     name: Dependency Advisory Check
     runs-on: ubuntu-latest
