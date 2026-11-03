@@ -1,0 +1,24 @@
+[package]
+name = "workuum"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Removes merged, stale and least-recently-used git worktrees to keep disk space free."
+
+[[bin]]
+name = "workuum"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+dunce.workspace = true
+glob.workspace = true
+serde_json.workspace = true
+workuum-core.workspace = true
+workuum-git.workspace = true
+workuum-scan.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
