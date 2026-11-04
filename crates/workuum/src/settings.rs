@@ -154,15 +154,12 @@ impl Settings {
             }
             let id = arg.get_id().clone();
             // clap wants 'static defaults, and the process is one short run
+            let defaults: Vec<&'static str> = texts.into_iter().map(|text| &*text.leak()).collect();
             command = match key.as_str() {
                 "interval" => command.mut_subcommand("watch", |watch| {
-                    watch.mut_arg(id, |arg| {
-                        arg.default_values(texts.into_iter().map(String::leak).map(|text| &*text))
-                    })
+                    watch.mut_arg(id, |arg| arg.default_values(defaults))
                 }),
-                _ => command.mut_arg(id, |arg| {
-                    arg.default_values(texts.into_iter().map(String::leak).map(|text| &*text))
-                }),
+                _ => command.mut_arg(id, |arg| arg.default_values(defaults)),
             };
         }
         Ok(command)

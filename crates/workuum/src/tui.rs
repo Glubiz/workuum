@@ -200,9 +200,6 @@ impl App {
             KeyCode::Enter if is_flag(self.arg()) => self.toggle(),
             KeyCode::Enter => {
                 let text = match self.set(&self.key()) {
-                    Some(Value::Array(items)) => {
-                        items.iter().map(value_text).collect::<Vec<_>>().join(", ")
-                    }
                     Some(value) => value_text(value),
                     None => default_text(self.arg()),
                 };
@@ -253,7 +250,8 @@ impl App {
 
     fn set_value(&mut self, input: String) {
         let (key, arg) = (self.key(), self.arg().clone());
-        let items: Vec<String> = match is_list(&arg) {
+        let list = is_list(&arg);
+        let mut items: Vec<String> = match list {
             true => input
                 .split(',')
                 .map(str::trim)
@@ -271,17 +269,15 @@ impl App {
             return;
         }
         self.notice.clear();
-        match is_list(&arg) {
-            true if items.is_empty() => drop(self.session_mut().remove(&key)),
-            true => drop(self.session_mut().insert(
-                key,
-                Value::Array(items.into_iter().map(Value::String).collect()),
-            )),
-            false => drop(
-                self.session_mut()
-                    .insert(key, Value::String(items[0].clone())),
-            ),
+        if items.is_empty() {
+            self.session_mut().remove(&key);
+            return;
         }
+        let value = match list {
+            true => Value::Array(items.into_iter().map(Value::String).collect()),
+            false => Value::String(items.swap_remove(0)),
+        };
+        self.session_mut().insert(key, value);
     }
 
     pub fn draw(&self, frame: &mut Frame) {
