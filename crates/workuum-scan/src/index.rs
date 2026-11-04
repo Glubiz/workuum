@@ -14,6 +14,18 @@ pub fn state_dir() -> Option<PathBuf> {
     dirs::data_local_dir().map(|dir| dir.join("workuum"))
 }
 
+/// Writes to a temp file next to `path`, then renames it into place.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    fs::create_dir_all(dir)?;
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let temp = dir.join(format!("{name}.{}.tmp", std::process::id()));
+    fs::write(&temp, bytes)?;
+    fs::rename(&temp, path).inspect_err(|_| {
+        let _ = fs::remove_file(&temp);
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Index {
     pub roots: Vec<PathBuf>,
@@ -48,12 +60,7 @@ impl Index {
     }
 
     pub fn save(&self, dir: &Path) -> io::Result<()> {
-        fs::create_dir_all(dir)?;
-        let temp = dir.join(format!("{INDEX_FILE}.{}.tmp", std::process::id()));
-        fs::write(&temp, serde_json::to_vec_pretty(self)?)?;
-        fs::rename(&temp, dir.join(INDEX_FILE)).inspect_err(|_| {
-            let _ = fs::remove_file(&temp);
-        })
+        write_atomic(&dir.join(INDEX_FILE), &serde_json::to_vec_pretty(self)?)
     }
 
     pub fn is_fresh(

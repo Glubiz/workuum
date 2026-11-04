@@ -83,10 +83,17 @@ impl Sandbox {
         self.isolate(&mut command);
         command
             .env("WORKUUM_STATE_DIR", self.dir.path().join("state"))
+            .env("WORKUUM_CONFIG_DIR", self.dir.path().join("config"))
             .args(args)
             .arg("--root")
             .arg(self.projects());
         command
+    }
+
+    fn settings(&self, toml: &str) {
+        let dir = self.dir.path().join("config");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("settings.toml"), toml).unwrap();
     }
 
     fn workuum(&self, args: &[&str]) -> Output {
@@ -473,4 +480,195 @@ fn list_and_dry_run_leave_the_admin_dir_untouched() {
     succeeded(&sandbox.workuum(&["clean", "--dry-run", "--min-age", "0s"]));
 
     assert_eq!(mtimes(), before);
+}
+
+const EAGER: &str = "min-age = \"0s\"\nstale-after = \"0s\"\n";
+
+#[test]
+fn saved_default_session_applies_without_flags() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.repo();
+    let open = sandbox.worktree(&repo, "open", false);
+    succeeded(&sandbox.workuum(&["clean"]));
+    assert!(open.exists());
+    sandbox.settings(&format!("[sessions.default]\n{EAGER}"));
+
+    succeeded(&sandbox.workuum(&["clean"]));
+
+    assert!(!open.exists());
+}
+
+#[test]
+fn session_flag_and_env_select_a_session() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.repo();
+    let by_flag = sandbox.worktree(&repo, "by-flag", false);
+    let by_env = sandbox.worktree(&repo, "by-env", false);
+    sandbox.settings(&format!(
+        "[sessions.default]\nmin-age = \"1d\"\n[sessions.eager]\n{EAGER}"
+    ));
+    succeeded(&sandbox.workuum(&["clean", "--dry-run"]));
+    assert!(by_flag.exists() && by_env.exists());
+
+    succeeded(&sandbox.workuum(&["clean", "--session", "eager", "--dry-run"]));
+    assert!(by_flag.exists());
+    succeeded(&sandbox.workuum(&["clean", "--session", "eager"]));
+    assert!(!by_flag.exists() && !by_env.exists());
+}
+
+#[test]
+fn session_env_selects_a_session() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.repo();
+    let open = sandbox.worktree(&repo, "open", false);
+    sandbox.settings(&format!("[sessions.eager]\n{EAGER}"));
+
+    let mut command = sandbox.command(&["clean", "--skip-global-caches"]);
+    assert!(
+        command
+            .env("WORKUUM_SESSION", "eager")
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    assert!(!open.exists());
+}
+
+#[test]
+fn unknown_session_is_a_usage_error() {
+    let sandbox = Sandbox::new();
+    sandbox.settings("[sessions.a]\n[sessions.b]\n");
+
+    let output = sandbox.workuum(&["list", "--session", "c"]);
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown session 'c'; saved sessions: a, b"),
+        "{stderr}"
+    );
+    let output = Sandbox::new().workuum(&["list", "--session", "c"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown session 'c'; none saved"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn invalid_saved_value_is_a_usage_error() {
+    let sandbox = Sandbox::new();
+    sandbox.settings("[sessions.default]\nmin-free = \"lots\"\n");
+
+    let output = sandbox.workuum(&["list"]);
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("settings.toml"), "{stderr}");
+    assert!(stderr.contains("session 'default'"), "{stderr}");
+    assert!(stderr.contains("min-free"), "{stderr}");
+    assert!(stderr.contains("invalid size"), "{stderr}");
+}
+
+#[test]
+fn flag_beats_env_beats_session_beats_default() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.repo();
+    let open = sandbox.worktree(&repo, "open", false);
+    sandbox.settings(&format!("[sessions.default]\n{EAGER}"));
+    let run = |env: &[(&str, &str)], args: &[&str]| {
+        let mut command = sandbox.command(&[&["clean"], args].concat());
+        command
+            .arg("--skip-global-caches")
+            .envs(env.iter().copied());
+        assert!(command.status().unwrap().success());
+    };
+
+    run(&[("WORKUUM_MIN_AGE", "1d")], &[]);
+    assert!(open.exists(), "env beats session");
+    run(&[], &["--min-age", "1d"]);
+    assert!(open.exists(), "flag beats session");
+    run(&[("WORKUUM_MIN_AGE", "1d")], &["--min-age", "0s"]);
+    assert!(!open.exists(), "flag beats env");
+}
+
+#[test]
+fn boolean_precedence_follows_the_same_order() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.repo();
+    sandbox.settings("[sessions.default]\nmin-age = \"0s\"\ndelete-branch = true\n");
+    let branch_survives = |name: &str, env: &[(&str, &str)]| {
+        let worktree = sandbox.worktree(&repo, name, true);
+        let mut command = sandbox.command(&["clean", "--skip-global-caches"]);
+        assert!(
+            command
+                .envs(env.iter().copied())
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(!worktree.exists());
+        sandbox
+            .git(&repo, &["branch", "--list", name])
+            .contains(name)
+    };
+
+    assert!(!branch_survives("session", &[]), "session turns it on");
+    assert!(
+        branch_survives("env", &[("WORKUUM_DELETE_BRANCH", "false")]),
+        "env beats session"
+    );
+}
+
+#[test]
+fn watch_interval_follows_the_session() {
+    let sandbox = Sandbox::new();
+    sandbox.settings("[sessions.default]\ninterval = \"soon\"\n");
+
+    let output = sandbox.workuum(&["watch"]);
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("interval"));
+}
+
+#[test]
+fn boolean_flag_can_turn_off_a_saved_true() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.repo();
+    sandbox.settings("[sessions.default]\nmin-age = \"0s\"\ndelete-branch = true\n");
+    let branch_survives = |name: &str, args: &[&str]| {
+        let worktree = sandbox.worktree(&repo, name, true);
+        succeeded(&sandbox.workuum(&[&["clean"], args].concat()));
+        assert!(!worktree.exists());
+        sandbox
+            .git(&repo, &["branch", "--list", name])
+            .contains(name)
+    };
+
+    assert!(!branch_survives("session", &[]));
+    assert!(branch_survives("flag", &["--delete-branch=false"]));
+}
+
+#[test]
+fn bare_boolean_flag_before_the_subcommand_still_parses() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.repo();
+    let worktree = sandbox.worktree(&repo, "done", true);
+
+    let mut command = sandbox.command(&["--delete-branch", "clean", "--min-age", "0s"]);
+    assert!(
+        command
+            .arg("--skip-global-caches")
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    assert!(!worktree.exists());
+    assert!(
+        !sandbox
+            .git(&repo, &["branch", "--list", "done"])
+            .contains("done")
+    );
 }

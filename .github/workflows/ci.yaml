@@ -55,6 +55,121 @@ jobs:
       - name: Run Tests
         run: cargo nextest run --workspace --no-fail-fast
 
+  # ureq pulls in ring, which compiles C; the musl release builds otherwise only run after merge.
+  release-build:
+    name: Release build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.4.0
+
+      - name: Set Up Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Static musl Binary
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          rustup target add ${{ matrix.target }}
+          cargo build --release -p workuum --target ${{ matrix.target }}
+
+      - name: Run Binary
+        run: target/${{ matrix.target }}/release/workuum --version
+
+  # Runs this checkout's installers against the latest published release.
+  install:
+    name: Install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4.4.0
+
+      # Linux runners have no reliable systemd user session, so --service is only exercised on macOS.
+      - name: Install (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          WORKUUM_INSTALL_DIR="$RUNNER_TEMP/wk/bin" sh install.sh
+          "$RUNNER_TEMP/wk/bin/workuum" --version
+
+      - name: Install with service (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          WORKUUM_INSTALL_DIR="$RUNNER_TEMP/wk/bin" sh install.sh --service
+          "$RUNNER_TEMP/wk/bin/workuum" --version
+          launchctl print "gui/$(id -u)/local.workuum"
+          # Re-running must replace the registration.
+          WORKUUM_INSTALL_DIR="$RUNNER_TEMP/wk/bin" sh install.sh --service
+          launchctl print "gui/$(id -u)/local.workuum"
+
+      - name: Clean up service (macOS)
+        if: runner.os == 'macOS' && always()
+        run: |
+          launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/local.workuum.plist" || true
+          rm -f "$HOME/Library/LaunchAgents/local.workuum.plist"
+
+      - name: Install with service (Windows PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $PSVersionTable.PSVersion
+          # A %VAR% PATH entry must survive the installer's PATH write-back as REG_EXPAND_SZ.
+          $raw = (Get-Item 'HKCU:\Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          New-ItemProperty -Path 'HKCU:\Environment' -Name Path -Value "$raw;%USERPROFILE%\wk-sentinel" -PropertyType ExpandString -Force | Out-Null
+          & .\install.ps1 -InstallDir "$env:RUNNER_TEMP\wk\bin" -Service
+          & "$env:RUNNER_TEMP\wk\bin\workuum.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw 'workuum --version failed' }
+          schtasks /Query /TN workuum
+          if ($LASTEXITCODE -ne 0) { throw 'scheduled task missing' }
+          # Re-running must stop the task, replace the exe and start it again.
+          & .\install.ps1 -InstallDir "$env:RUNNER_TEMP\wk\bin" -Service
+          schtasks /Query /TN workuum
+          if ($LASTEXITCODE -ne 0) { throw 'scheduled task missing after re-run' }
+          # Re-installing without -Service must leave the existing task running.
+          & .\install.ps1 -InstallDir "$env:RUNNER_TEMP\wk\bin"
+          $running = $false
+          foreach ($i in 1..10) {
+            if ((schtasks /Query /TN workuum /FO LIST | Out-String) -match 'Status:\s+Running') { $running = $true; break }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $running) { schtasks /Query /TN workuum /FO LIST; throw 'task is not Running after re-install without -Service' }
+          # Exactly one workuum, running the new binary: an old image must not survive the re-install.
+          $target = "$env:RUNNER_TEMP\wk\bin\workuum.exe"
+          $procs = @()
+          foreach ($i in 1..10) {
+            $procs = @(Get-Process workuum -ErrorAction SilentlyContinue)
+            if ($procs.Count -eq 1 -and $procs[0].Path -eq $target) { break }
+            Start-Sleep -Seconds 1
+          }
+          if ($procs.Count -ne 1 -or $procs[0].Path -ne $target) { $procs | Format-Table Id, Path; throw "expected exactly one workuum at $target, found $($procs.Count)" }
+          $after = (Get-Item 'HKCU:\Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          if (-not $after.Contains('%USERPROFILE%\wk-sentinel')) { throw "PATH lost its unexpanded entry: $after" }
+          if ((Get-Item 'HKCU:\Environment').GetValueKind('Path') -ne 'ExpandString') { throw 'PATH is no longer REG_EXPAND_SZ' }
+
+      - name: Clean up service (Windows)
+        if: runner.os == 'Windows' && always()
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          schtasks /End /TN workuum
+          schtasks /Delete /TN workuum /F
+          $raw = (Get-Item 'HKCU:\Environment').GetValue('Path', '', 'DoNotExpandEnvironmentNames')
+          $kept = ($raw -split ';' | Where-Object { $_ -and $_ -ne '%USERPROFILE%\wk-sentinel' }) -join ';'
+          New-ItemProperty -Path 'HKCU:\Environment' -Name Path -Value $kept -PropertyType ExpandString -Force | Out-Null
+        continue-on-error: true
+
   dependency-audit:
     name: Dependency Advisory Check
     runs-on: ubuntu-latest

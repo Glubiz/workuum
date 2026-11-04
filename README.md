@@ -4,9 +4,29 @@ Docuum for git worktrees. workuum finds every linked git worktree on your machin
 
 ## Install
 
+macOS and Linux:
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Glubiz/workuum/main/install.sh | sh
 ```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/Glubiz/workuum/main/install.ps1 | iex
+```
+
+Add `--service` (`-Service` on Windows) to also register the background service, see [Running in the background](#running-in-the-background):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Glubiz/workuum/main/install.sh | sh -s -- --service
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Glubiz/workuum/main/install.ps1))) -Service
+```
+
+The scripts install the latest release, or the version you pass (`sh -s -- 0.1.0`, `-Version 0.1.0`), and verify its sha256. `WORKUUM_INSTALL_DIR` sets the folder (`/usr/local/bin`, or `%LOCALAPPDATA%\Programs\workuum` on Windows). They refuse to overwrite a Homebrew or Chocolatey install unless `WORKUUM_INSTALL_FORCE=1` (`-Force`).
 
 Homebrew (macOS and Linux), using the `Glubiz/homebrew-tap` tap:
 
@@ -25,6 +45,14 @@ From source:
 ```sh
 cargo install --path crates/workuum
 ```
+
+## Updating
+
+`workuum update` checks the latest GitHub release and does nothing when already current.
+
+When Homebrew or Chocolatey owns the binary, it runs `brew upgrade workuum` or `choco upgrade workuum -y` (Chocolatey needs an elevated shell). On failure it prints the command to run.
+
+Otherwise it downloads the release for your OS and CPU, verifies its sha256, checks the new binary runs, and replaces the running binary in place. When the binary lives in a folder that needs admin rights, such as `/usr/local/bin`, run it with `sudo`.
 
 ## Quick start
 
@@ -111,14 +139,63 @@ Every option is global and can also be set through its environment variable. Lis
 | `--delete-branch` | `WORKUUM_DELETE_BRANCH` | off | delete the branch of a merged worktree after removing it |
 | `--skip-global-caches` | `WORKUUM_SKIP_GLOBAL_CACHES` | off | never clear npm, bun, pnpm, yarn, go or pip caches |
 | `--rescan <dur>` | `WORKUUM_RESCAN` | `24h` | search the roots again when the stored index is older than this |
+| `--session <name>` | `WORKUUM_SESSION` | `default` if saved | saved settings session to use, see [Settings](#settings) |
 | `watch --interval <dur>` | `WORKUUM_INTERVAL` | `1h` | time between passes |
 | `clean --dry-run` | | off | print what would happen, change nothing |
 
+Boolean flags can be turned off with `--fetch=false`, which overrides a saved session.
+
 Durations look like `90s`, `30m`, `24h`, `1d` or `2w`.
+
+## Settings
+
+Run `workuum settings` for a full-screen editor of saved settings, so `workuum` and the background service run with your options and no flags. It needs an interactive terminal and works from the keyboard alone.
+
+| Key | Action |
+| --- | --- |
+| `↑` `↓` or `k` `j` | move between options |
+| `Enter` | edit the value; lists are comma-separated, `Esc` cancels. On a boolean, `Enter` or `Space` toggles it |
+| `r` | reset the option to its default (removes it from the session) |
+| `←` `→` | switch session |
+| `n` | new session, starting as a copy of the current one |
+| `d` | delete the session, after a `y`/`n` confirm |
+| `s` | save |
+| `q` or `Esc` | quit; with unsaved changes it asks to save, discard or cancel |
+
+The editor shows each option's value, its default, and `*` where the session sets it. Input is checked with the same parser the flag uses, so an invalid value is refused with the parser's message.
+
+Settings live in `settings.toml` in the OS config directory:
+
+- macOS: `~/Library/Application Support/workuum/settings.toml`
+- Linux: `~/.config/workuum/settings.toml`
+- Windows: `%APPDATA%\workuum\settings.toml`
+
+Set `WORKUUM_CONFIG_DIR` to use another directory. The file has one table per session, keyed by the long flag names. Lists are arrays, booleans are booleans and everything else is a string in the flag's own syntax. A leading `~` in `root` entries is the home directory.
+
+```toml
+[sessions.default]
+min-free = "15%"
+root = ["~/code"]
+fetch = true
+
+[sessions.aggressive]
+min-age = "0s"
+stale-after = "7d"
+```
+
+Without `--session` (or `WORKUUM_SESSION`) workuum uses the session named `default` if it is saved, otherwise the built-in defaults. An unknown session name or an invalid saved value exits with status 2. `workuum settings` and `workuum update` ignore the saved values, so a broken setting never stops you fixing it.
+
+For every option the order is: flag, then environment variable, then session, then built-in default. A flag turns a boolean on, and an environment variable such as `WORKUUM_FETCH=false` turns it off over a session that sets it.
 
 ## Running in the background
 
-The files in `service/` run `workuum watch` and assume the binary is at `/usr/local/bin/workuum` (the Windows task runs `workuum.exe` from your `PATH`).
+The files in `service/` run `workuum watch` with no flags, so the service uses your saved `default` settings session. The simplest way to register it is the installer with `--service` (`-Service` on Windows). It fetches the service file for the installed version, points it at the installed binary and replaces any earlier registration, so re-running is safe:
+
+- macOS: a launchd agent at `~/Library/LaunchAgents/local.workuum.plist`.
+- Linux: a systemd user unit at `~/.config/systemd/user/workuum.service`. This needs a systemd user session.
+- Windows: a scheduled task named `workuum` that runs at logon.
+
+If registration fails the binary is still installed, and the installer prints the manual steps and exits non-zero. To do it by hand, edit the binary path in the file (the files assume `/usr/local/bin/workuum`; the Windows task runs `workuum.exe` from your `PATH`) and then:
 
 macOS:
 
