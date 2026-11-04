@@ -363,6 +363,28 @@ mod tests {
         assert!(!new.exists());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn replace_succeeds_when_a_previous_old_file_is_still_held() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("workuum.exe");
+        let new = dir.path().join("new");
+        fs::write(&target, b"old").unwrap();
+        fs::write(&new, b"new").unwrap();
+        // Share mode 0 stops the file being deleted or renamed over, like a running image.
+        let _held = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .share_mode(0)
+            .open(dir.path().join("workuum.exe.old"))
+            .unwrap();
+        replace(&target, &new).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"new");
+    }
+
     #[test]
     fn replace_failure_leaves_the_new_file_alone() {
         let dir = tempfile::tempdir().unwrap();
