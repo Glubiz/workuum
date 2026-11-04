@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand};
 use glob::Pattern;
 use workuum_core::{MinFree, parse_duration, parse_min_free, parse_optional_duration};
 
@@ -49,13 +49,13 @@ pub struct Options {
     #[arg(long, global = true, env = "WORKUUM_MIN_FREE", default_value = "10%", value_parser = parse_min_free)]
     pub min_free: MinFree,
     /// Run git fetch --prune in each repository before judging merges
-    #[arg(long, global = true, env = "WORKUUM_FETCH")]
+    #[arg(long, global = true, env = "WORKUUM_FETCH", action = ArgAction::Set, num_args = 0..=1, require_equals = true, default_value = "false", default_missing_value = "true")]
     pub fetch: bool,
     /// Also delete the branch of a merged worktree it removes
-    #[arg(long, global = true, env = "WORKUUM_DELETE_BRANCH")]
+    #[arg(long, global = true, env = "WORKUUM_DELETE_BRANCH", action = ArgAction::Set, num_args = 0..=1, require_equals = true, default_value = "false", default_missing_value = "true")]
     pub delete_branch: bool,
     /// Never clear npm, bun, pnpm, yarn, go or pip caches under disk pressure
-    #[arg(long, global = true, env = "WORKUUM_SKIP_GLOBAL_CACHES")]
+    #[arg(long, global = true, env = "WORKUUM_SKIP_GLOBAL_CACHES", action = ArgAction::Set, num_args = 0..=1, require_equals = true, default_value = "false", default_missing_value = "true")]
     pub skip_global_caches: bool,
     /// Search the roots again when the stored index is older than this
     #[arg(long, global = true, env = "WORKUUM_RESCAN", default_value = "24h", value_parser = parse_duration)]

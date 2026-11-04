@@ -3,7 +3,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use clap::{Arg, ArgAction, Command};
+use clap::{Arg, Command};
 use serde::{Deserialize, Serialize};
 use toml::Value;
 use workuum_scan::write_atomic;
@@ -39,7 +39,7 @@ pub fn options(command: &Command) -> Vec<&Arg> {
 }
 
 pub fn is_flag(arg: &Arg) -> bool {
-    matches!(arg.get_action(), ArgAction::SetTrue)
+    arg.is_require_equals_set()
 }
 
 pub fn is_list(arg: &Arg) -> bool {

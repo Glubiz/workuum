@@ -631,3 +631,44 @@ fn watch_interval_follows_the_session() {
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("interval"));
 }
+
+#[test]
+fn boolean_flag_can_turn_off_a_saved_true() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.repo();
+    sandbox.settings("[sessions.default]\nmin-age = \"0s\"\ndelete-branch = true\n");
+    let branch_survives = |name: &str, args: &[&str]| {
+        let worktree = sandbox.worktree(&repo, name, true);
+        succeeded(&sandbox.workuum(&[&["clean"], args].concat()));
+        assert!(!worktree.exists());
+        sandbox
+            .git(&repo, &["branch", "--list", name])
+            .contains(name)
+    };
+
+    assert!(!branch_survives("session", &[]));
+    assert!(branch_survives("flag", &["--delete-branch=false"]));
+}
+
+#[test]
+fn bare_boolean_flag_before_the_subcommand_still_parses() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.repo();
+    let worktree = sandbox.worktree(&repo, "done", true);
+
+    let mut command = sandbox.command(&["--delete-branch", "clean", "--min-age", "0s"]);
+    assert!(
+        command
+            .arg("--skip-global-caches")
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    assert!(!worktree.exists());
+    assert!(
+        !sandbox
+            .git(&repo, &["branch", "--list", "done"])
+            .contains("done")
+    );
+}

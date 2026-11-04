@@ -143,6 +143,8 @@ Every option is global and can also be set through its environment variable. Lis
 | `watch --interval <dur>` | `WORKUUM_INTERVAL` | `1h` | time between passes |
 | `clean --dry-run` | | off | print what would happen, change nothing |
 
+Boolean flags can be turned off with `--fetch=false`, which overrides a saved session.
+
 Durations look like `90s`, `30m`, `24h`, `1d` or `2w`.
 
 ## Settings
