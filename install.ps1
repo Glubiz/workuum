@@ -63,11 +63,16 @@ try {
     $ErrorActionPreference = 'Continue'
     & schtasks.exe /Query /TN workuum *> $null
     $taskExisted = ($LASTEXITCODE -eq 0)
-    if ($taskExisted) { & schtasks.exe /End /TN workuum *> $null }
+    if ($taskExisted) {
+        & schtasks.exe /End /TN workuum *> $null
+        # /End can return before the process exits; give the old image a moment to go away.
+        Get-Process workuum -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($Target, [StringComparison]::OrdinalIgnoreCase) } | Wait-Process -Timeout 15 -ErrorAction SilentlyContinue
+    }
     $ErrorActionPreference = 'Stop'
-    # /End can return before the process exits, and a running exe cannot be overwritten but can be renamed.
+    # A running exe cannot be overwritten but can be renamed. Leftovers from earlier installs may still be held.
+    Get-ChildItem -Path $InstallDir -Filter 'workuum.exe*.old' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     $Old = "$Target.old"
-    Remove-Item -Force $Old -ErrorAction SilentlyContinue
+    if (Test-Path $Old) { $Old = "$Target.$PID.old" }
     if (Test-Path $Target) { Move-Item -Force $Target $Old }
     try {
         Move-Item -Force (Join-Path $Tmp $Asset) $Target

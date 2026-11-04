@@ -107,7 +107,11 @@ fn replace(target: &Path, new: &Path) -> Result<(), String> {
     if cfg!(unix) {
         return fs::rename(new, target).map_err(|error| io_error("replace", target, error));
     }
-    let old = target.with_extension("exe.old");
+    let mut old = target.with_extension("exe.old");
+    // A previous image may still hold `.old` (a service that kept running), so park this one under a unique name.
+    if fs::remove_file(&old).is_err() && old.exists() {
+        old = target.with_extension(format!("exe.{}.old", std::process::id()));
+    }
     fs::rename(target, &old).map_err(|error| io_error("rename", target, error))?;
     if let Err(error) = fs::rename(new, target) {
         let mut message = io_error("replace", target, error);
@@ -150,8 +154,18 @@ pub fn run() -> Result<(), String> {
     let exe =
         std::env::current_exe().map_err(|error| format!("could not locate workuum: {error}"))?;
     let exe = dunce::canonicalize(&exe).map_err(|error| io_error("resolve", &exe, error))?;
-    if cfg!(windows) {
-        let _ = fs::remove_file(exe.with_extension("exe.old"));
+    if let (true, Some(dir), Some(name)) = (
+        cfg!(windows),
+        exe.parent(),
+        exe.file_name().and_then(|name| name.to_str()),
+    ) {
+        for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let file = entry.file_name();
+            let file = file.to_string_lossy();
+            if file.starts_with(name) && file.ends_with(".old") {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
     }
 
     let release = fetch(
