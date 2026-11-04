@@ -23,7 +23,7 @@ sha2 = "0.11.0"
 tar = "0.4.46"
 tempfile = "3.27.0"
 toml = "1.0.6"
-ureq = "3.4.0"
+ureq = { version = "3.4.0", features = ["platform-verifier"] }
 walkdir = "2.5.0"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 workuum-core = { path = "crates/workuum-core" }

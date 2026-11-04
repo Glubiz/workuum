@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use ureq::tls::{RootCerts, TlsConfig};
 
 const REPOSITORY: &str = "Glubiz/workuum";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -124,6 +125,12 @@ fn fetch(url: &str, limit: u64) -> Result<Vec<u8>, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(DOWNLOAD_TIMEOUT))
         .timeout_connect(Some(CONNECT_TIMEOUT))
+        // The OS trust store, so TLS-inspecting endpoint security tools work.
+        .tls_config(
+            TlsConfig::builder()
+                .root_certs(RootCerts::PlatformVerifier)
+                .build(),
+        )
         .build()
         .into();
     agent
