@@ -65,7 +65,18 @@ try {
     $taskExisted = ($LASTEXITCODE -eq 0)
     if ($taskExisted) { & schtasks.exe /End /TN workuum *> $null }
     $ErrorActionPreference = 'Stop'
-    Move-Item -Force (Join-Path $Tmp $Asset) $Target
+    # /End can return before the process exits, and a running exe cannot be overwritten but can be renamed.
+    $Old = "$Target.old"
+    Remove-Item -Force $Old -ErrorAction SilentlyContinue
+    if (Test-Path $Target) { Move-Item -Force $Target $Old }
+    try {
+        Move-Item -Force (Join-Path $Tmp $Asset) $Target
+    } catch {
+        if (Test-Path $Old) { Move-Item -Force $Old $Target }
+        throw
+    }
+    # Fails while the old exe is still running; the next install removes it.
+    Remove-Item -Force $Old -ErrorAction SilentlyContinue
     Write-Host "workuum v$Version installed to $Target"
 
     # Read the raw value so %VAR% entries and the REG_EXPAND_SZ type survive the write-back.
