@@ -114,14 +114,16 @@ verify_checksum() {
     echo "Checksum verified."
 }
 
+sed_escape() {
+    printf '%s' "$1" | sed 's/[\\|&]/\\&/g'
+}
+
 # Registers the background service from the repo's service/ folder at the installed tag.
 register_service() {
     version="$1"
     binary_path="$2"
     tmpdir="$3"
     base_url="https://raw.githubusercontent.com/${REPO}/v${version}/service"
-    # Escape sed replacement specials in the binary path.
-    sed_path=$(printf '%s' "$binary_path" | sed 's/[\\|&]/\\&/g')
 
     case "$(uname -s)" in
         Darwin)
@@ -129,7 +131,9 @@ register_service() {
             dest="${HOME}/Library/LaunchAgents/${file}"
             mkdir -p "${HOME}/Library/LaunchAgents"
             curl -sSfL -o "${tmpdir}/${file}" "${base_url}/${file}" || return 1
-            sed "s|/usr/local/bin/workuum|${sed_path}|" "${tmpdir}/${file}" > "$dest" || return 1
+            # XML-escape the path for the plist.
+            xml_path=$(printf '%s' "$binary_path" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+            sed "s|/usr/local/bin/workuum|$(sed_escape "$xml_path")|" "${tmpdir}/${file}" > "$dest" || return 1
             uid=$(id -u)
             launchctl bootout "gui/${uid}" "$dest" >/dev/null 2>&1 || true
             # bootout can still be tearing down the old job; retry bootstrap briefly.
@@ -145,7 +149,9 @@ register_service() {
             dest="${HOME}/.config/systemd/user/${file}"
             mkdir -p "${HOME}/.config/systemd/user"
             curl -sSfL -o "${tmpdir}/${file}" "${base_url}/${file}" || return 1
-            sed "s|/usr/local/bin/workuum|${sed_path}|" "${tmpdir}/${file}" > "$dest" || return 1
+            # Quote the path for ExecStart; systemd also expands % and $ inside quotes.
+            unit_path=$(printf '%s' "$binary_path" | sed 's/[\\"]/\\&/g; s/%/%%/g; s/\$/$$/g')
+            sed "s|/usr/local/bin/workuum|$(sed_escape "\"${unit_path}\"")|" "${tmpdir}/${file}" > "$dest" || return 1
             systemctl --user daemon-reload || return 1
             systemctl --user enable workuum.service || return 1
             systemctl --user restart workuum.service || return 1

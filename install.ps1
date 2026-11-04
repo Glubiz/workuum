@@ -58,16 +58,30 @@ try {
     Write-Host 'Checksum verified.'
 
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    # A running task holds workuum.exe open; stop it before replacing. Failure or "not running" is fine.
-    try { & schtasks.exe /End /TN workuum 2>&1 | Out-Null } catch { }
+    # A running task holds workuum.exe open. Remember whether it exists, then stop it before replacing.
+    # Native stderr must not become a terminating error on 5.1, so relax the preference for these calls.
+    $ErrorActionPreference = 'Continue'
+    & schtasks.exe /Query /TN workuum *> $null
+    $taskExisted = ($LASTEXITCODE -eq 0)
+    if ($taskExisted) { & schtasks.exe /End /TN workuum *> $null }
+    $ErrorActionPreference = 'Stop'
     Move-Item -Force (Join-Path $Tmp $Asset) $Target
     Write-Host "workuum v$Version installed to $Target"
 
-    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $entries = @($userPath -split ';' | Where-Object { $_ })
-    if ($entries -notcontains $InstallDir) {
-        [Environment]::SetEnvironmentVariable('Path', (($entries + $InstallDir) -join ';'), 'User')
+    # Read the raw value so %VAR% entries and the REG_EXPAND_SZ type survive the write-back.
+    $envKey = Get-Item 'HKCU:\Environment'
+    $rawPath = [string]$envKey.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    $entries = @($rawPath -split ';' | Where-Object { $_ })
+    $expanded = @($entries | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') })
+    if ($expanded -notcontains $InstallDir.TrimEnd('\')) {
+        New-ItemProperty -Path 'HKCU:\Environment' -Name Path -Value (($entries + $InstallDir) -join ';') -PropertyType ExpandString -Force | Out-Null
         Write-Host "Added $InstallDir to your user PATH."
+        # Registry writes do not notify running apps; broadcast WM_SETTINGCHANGE so new terminals pick it up.
+        if (-not ('WorkuumNative.Env' -as [type])) {
+            Add-Type -Namespace WorkuumNative -Name Env -MemberDefinition '[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);'
+        }
+        $broadcastResult = [UIntPtr]::Zero
+        [void][WorkuumNative.Env]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$broadcastResult)
     }
     if (@($env:Path -split ';') -notcontains $InstallDir) {
         $env:Path = "$env:Path;$InstallDir"
@@ -76,7 +90,7 @@ try {
     if ($Service) {
         try {
             $base = "https://raw.githubusercontent.com/$Repo/v$Version/service"
-            $xml = (Invoke-RestMethod -UseBasicParsing "$base/workuum.xml")
+            $xml = (Invoke-WebRequest -UseBasicParsing -Uri "$base/workuum.xml").Content
             $escaped = [Security.SecurityElement]::Escape($Target)
             $xml = $xml.Replace('<Command>workuum.exe</Command>', "<Command>$escaped</Command>")
             # schtasks only reads the XML as UTF-16, so the declaration and the file encoding must both say so.
@@ -92,8 +106,14 @@ try {
             Write-Host "workuum IS installed at $Target, but the service could not be registered: $_" -ForegroundColor Red
             Write-Host 'Register it manually: download service/workuum.xml, set <Command> to the full path above, then run:'
             Write-Host '  schtasks /Create /TN workuum /XML workuum.xml /F'
-            exit 1
+            throw 'Service registration failed.'
         }
+    } elseif ($taskExisted) {
+        # The task was stopped to replace the exe, so start it again.
+        $ErrorActionPreference = 'Continue'
+        & schtasks.exe /Run /TN workuum *> $null
+        if ($LASTEXITCODE -ne 0) { Write-Warning 'Could not restart the workuum scheduled task; run: schtasks /Run /TN workuum' }
+        $ErrorActionPreference = 'Stop'
     }
 
     Write-Host "Run '$Target --version' to verify."
